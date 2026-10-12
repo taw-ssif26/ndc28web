@@ -5,7 +5,8 @@ import { api } from "../lib/api";
 import Loader from "../components/Loader";
 
 // STUDENT PORTAL — one page, tabs on the left. A loader plays on every tab change (students only).
-const TABS = [["dash", "Home"], ["events", "Events"], ["notices", "Notices"], ["community", "Community"], ["resources", "Resources"], ["gallery", "Gallery"]];
+// [key, icon, label] — icon shows in the mobile bottom bar
+const TABS = [["dash", "🏠", "Home"], ["events", "📅", "Events"], ["notices", "📌", "Notices"], ["community", "💬", "Community"], ["resources", "📚", "Resources"], ["gallery", "🖼", "Gallery"]];
 const when = s => s ? new Date(s).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : "";
 const Link = ({ href, children }) => href ? <a className="btn" target="_blank" rel="noopener noreferrer" href={href}>{children} ↗</a> : null;
 
@@ -30,11 +31,13 @@ export default function Portal() {
   useEffect(() => { api("/me").then(setMe).catch(() => router.replace("/")); }, [router]);
   useEffect(() => { setBusy(true); const t = setTimeout(() => setBusy(false), 1000); return () => clearTimeout(t); }, [tab]);   // loader length (ms)
   if (!me) return <Loader kind="dash" />;
+  const logout = async () => { await api("/logout", { method: "POST" }); router.replace("/"); };
   return (<div className="shell">
     {busy && <Loader kind={tab} />}
+    <div className="mbar"><span className="brand"><img src="/logo.svg" alt="" /> Batch 28</span><span className="row" style={{ margin: 0 }}><img className="av" src={`/api/photo/${me.id}`} alt="" /><button className="ghost" onClick={logout}>Log out</button></span></div>
     <aside><span className="brand"><img src="/logo.svg" alt="" /> Batch 28</span>
-      {TABS.map(([k, l]) => <button key={k} className={`nv ${tab === k ? "on" : ""}`} onClick={() => setTab(k)}>{l}</button>)}
-      {me.role !== "student" && <a className="nv" href="/admin">⚙ Admin panel</a>}
-      <div className="me"><img className="av" src={`/api/photo/${me.id}`} alt="" /> {me.name}<br /><button className="ghost" onClick={async () => { await api("/logout", { method: "POST" }); router.replace("/"); }}>Log out</button></div></aside>
-    <main><h1>{TABS.find(t => t[0] === tab)[1]}</h1><Tab tab={tab} me={me} /></main></div>);
+      {TABS.map(([k, i, l]) => <button key={k} className={`nv ${tab === k ? "on" : ""}`} onClick={() => setTab(k)}><span className="ni">{i}</span><span>{l}</span></button>)}
+      {me.role !== "student" && <a className="nv" href="/admin"><span className="ni">⚙</span><span>Admin</span></a>}
+      <div className="me"><img className="av" src={`/api/photo/${me.id}`} alt="" /> {me.name}<br /><button className="ghost" onClick={logout}>Log out</button></div></aside>
+    <main><h1>{TABS.find(t => t[0] === tab)[2]}</h1><Tab tab={tab} me={me} /></main></div>);
 }

@@ -19,7 +19,7 @@ export default function Home() {
     <nav className="top"><span className="brand"><img src="/logo.svg" alt="NDC crest" /> {SITE.name}</span>
       <span><button className="ghost" onClick={() => setAuth("login")}>Log in</button> <button className="btn" onClick={() => setAuth("register")}>Register</button></span></nav>
 
-    <header className="hero" onMouseMove={torch}>
+    <header className="hero" onPointerMove={torch}>
       <Motes />
       <p className="kick">{SITE.college} · Est. 1949</p>
       <h1 className="mega" ref={title} data-t="BATCH 28">BATCH 28</h1>

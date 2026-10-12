@@ -27,5 +27,3 @@ cd ../frontend && npm install && npm run dev      # http://localhost:3000
 4. Log in as super admin → Admin → WhatsApp groups → add links. Keep Render awake with UptimeRobot on `/api/health` every 5 min.
 5. Backups: weekly `pg_dump "<Neon direct string>" -Fc -f backup.dump`.
 DB tools: `python manage.py stats | backup FILE | restore FILE | reset-password EMAIL | create-super EMAIL`.
-# ndc28web
-# ndc28web
