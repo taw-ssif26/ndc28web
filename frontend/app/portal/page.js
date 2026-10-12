@@ -6,7 +6,7 @@ import Loader from "../components/Loader";
 
 // STUDENT PORTAL — one page, tabs on the left. A loader plays on every tab change (students only).
 // [key, icon, label] — icon shows in the mobile bottom bar
-const TABS = [["dash", "🏠", "Home"], ["events", "📅", "Events"], ["notices", "📌", "Notices"], ["community", "💬", "Community"], ["resources", "📚", "Resources"], ["gallery", "🖼", "Gallery"]];
+const TABS = [["dash", "🏠", "Home"], ["events", "📅", "Events"], ["notices", "📌", "Notices"], ["community", "💬", "Community"], ["resources", "📚", "Resources"], ["gallery", "🖼", "Gallery"], ["apply", "🛡", "Be an admin"]];   // "apply" is shown to students only
 const when = s => s ? new Date(s).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) : "";
 const Link = ({ href, children }) => href ? <a className="btn" target="_blank" rel="noopener noreferrer" href={href}>{children} ↗</a> : null;
 
@@ -14,10 +14,22 @@ function Event({ x }) { const n = Date.now(), s = new Date(x.ends || x.starts) <
   return <div className="card"><span className="tag">{s} · {when(x.starts)}</span><h3>{x.title}</h3><p>{x.location}</p><p>{x.details}</p><br /><Link href={x.link}>Details</Link></div>; }
 function Notice({ x }) { return <details className={`card ${x.pinned ? "pin" : ""}`}><summary><span className="tag">{x.pinned ? "📌 " : ""}{x.category}</span><h3>{x.title}</h3></summary><p style={{ whiteSpace: "pre-wrap" }}>{x.body}</p></details>; }
 
+// Students apply to be an admin (also possible at registration). The super admin decides.
+function Apply({ d, setD }) {
+  const [err, setErr] = useState(""), [busy, setBusy] = useState(false);
+  async function send(e) { e.preventDefault(); setErr(""); setBusy(true);
+    try { await api("/admin-request", { method: "POST", json: { reason: new FormData(e.target).get("reason") } }); setD({ status: "pending" }); } catch (x) { setErr(x.message); }
+    setBusy(false); }
+  if (d.status === "pending") return <div className="card"><span className="tag">Under review</span><h3>Application sent</h3><p>The super admin will review it. The result appears here.</p></div>;
+  return <div className="card"><span className="tag">{d.status === "rejected" ? "Your last application was declined — you may apply again" : "Admins help run the batch"}</span><h3>Apply to be an admin</h3>
+    <form onSubmit={send}><label>Why should you be selected? (20+ characters)<textarea name="reason" minLength={20} maxLength={1000} required /></label><button className="btn" disabled={busy}>Submit application</button>{err && <p className="err">{err}</p>}</form></div>;
+}
+
 function Tab({ tab, me }) {
   const [d, setD] = useState(null);
-  useEffect(() => { const path = { dash: "/c/notices", events: "/c/events", notices: "/c/notices", community: "/community", resources: "/c/resources", gallery: "/gallery" }[tab]; api(path).then(setD).catch(e => setD({ error: e.message })); }, [tab]);
+  useEffect(() => { const path = { dash: "/c/notices", events: "/c/events", notices: "/c/notices", community: "/community", resources: "/c/resources", gallery: "/gallery", apply: "/admin-request/mine" }[tab]; api(path).then(setD).catch(e => setD({ error: e.message })); }, [tab]);
   if (!d) return null; if (d.error) return <p className="err">{d.error}</p>;
+  if (tab === "apply") return <Apply d={d} setD={setD} />;
   if (tab === "dash") return <><div className="bento"><div className="card"><span className="tag">Group</span><div className="big">{me.group_no}</div></div><div className="card"><span className="tag">Roll</span><div className="big">{me.roll}</div></div></div><h2>Latest notices</h2><div className="cards">{d.slice(0, 3).map(x => <Notice key={x.id} x={x} />)}</div></>;
   if (tab === "events") return <div className="cards">{d.map(x => <Event key={x.id} x={x} />)}{!d.length && <p>No events yet.</p>}</div>;
   if (tab === "notices") return <div className="cards">{d.map(x => <Notice key={x.id} x={x} />)}{!d.length && <p>No notices yet.</p>}</div>;
@@ -31,12 +43,13 @@ export default function Portal() {
   useEffect(() => { api("/me").then(setMe).catch(() => router.replace("/")); }, [router]);
   useEffect(() => { setBusy(true); const t = setTimeout(() => setBusy(false), 1000); return () => clearTimeout(t); }, [tab]);   // loader length (ms)
   if (!me) return <Loader kind="dash" />;
+  const tabs = TABS.filter(t => t[0] !== "apply" || me.role === "student");
   const logout = async () => { await api("/logout", { method: "POST" }); router.replace("/"); };
   return (<div className="shell">
     {busy && <Loader kind={tab} />}
     <div className="mbar"><span className="brand"><img src="/logo.svg" alt="" /> Batch 28</span><span className="row" style={{ margin: 0 }}><img className="av" src={`/api/photo/${me.id}`} alt="" /><button className="ghost" onClick={logout}>Log out</button></span></div>
     <aside><span className="brand"><img src="/logo.svg" alt="" /> Batch 28</span>
-      {TABS.map(([k, i, l]) => <button key={k} className={`nv ${tab === k ? "on" : ""}`} onClick={() => setTab(k)}><span className="ni">{i}</span><span>{l}</span></button>)}
+      {tabs.map(([k, i, l]) => <button key={k} className={`nv ${tab === k ? "on" : ""}`} onClick={() => setTab(k)}><span className="ni">{i}</span><span>{l}</span></button>)}
       {me.role !== "student" && <a className="nv" href="/admin"><span className="ni">⚙</span><span>Admin</span></a>}
       <div className="me"><img className="av" src={`/api/photo/${me.id}`} alt="" /> {me.name}<br /><button className="ghost" onClick={logout}>Log out</button></div></aside>
     <main><h1>{TABS.find(t => t[0] === tab)[2]}</h1><Tab tab={tab} me={me} /></main></div>);

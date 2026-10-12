@@ -11,7 +11,7 @@ D = dict(name="Ab Cd", father="Fa", mother="Ma", parent_phone="01700000000", wha
 @pytest.fixture()
 def apps():
     with TestClient(main.app) as boss:
-        main.q("truncate users, events, notices, resources, groups, gallery, login_fails restart identity")
+        main.q("truncate users, admin_requests, events, notices, resources, groups, gallery, login_fails restart identity")
         main.init()
         assert boss.post("/api/login", json={"id": os.environ["SUPER_EMAIL"], "password": os.environ["SUPER_PASSWORD"]}, headers=H).status_code == 200
         with TestClient(main.app) as kid: yield boss, kid
@@ -34,6 +34,32 @@ def test_full_flow(apps):
     assert kid.post("/api/c/notices", json={"title": "x"}, headers=H).status_code == 403
     assert boss.post("/api/c/notices", json={"title": "N", "body": "b", "category": "General", "pinned": 1}, headers=H).status_code == 200
     assert kid.get("/api/c/notices").json()[0]["title"] == "N"
+
+def test_admin_application(apps):
+    boss, kid = apps
+    assert reg(kid, apply_admin="1", admin_reason="too short").status_code == 400        # reason required, nothing created
+    assert reg(kid, apply_admin="1", admin_reason="I run the batch study group and can manage notices.").status_code == 200
+    rid = boss.get("/api/super/admin-requests").json()[0]["id"]
+    assert boss.post(f"/api/super/admin-requests/{rid}", json={"decision": "approved"}, headers=H).status_code == 400   # student not approved yet
+    sid = [u for u in boss.get("/api/admin/users").json() if u["roll"] == "12"][0]["id"]
+    boss.post(f"/api/admin/users/{sid}/status", json={"status": "approved"}, headers=H)
+    assert kid.post("/api/login", json={"id": "12", "password": "password1"}, headers=H).status_code == 200
+    assert kid.get("/api/admin-request/mine").json()["status"] == "pending"
+    assert kid.post("/api/admin-request", json={"reason": "x" * 30}, headers=H).status_code == 409                    # one pending at a time
+    assert kid.get("/api/super/admin-requests").status_code == 403                                                    # students can't decide
+    assert kid.get("/api/admin/users").status_code == 403
+    assert boss.post(f"/api/super/admin-requests/{rid}", json={"decision": "approved"}, headers=H).status_code == 200
+    assert kid.get("/api/admin/users").status_code == 200                                                             # now an admin
+
+def test_apply_later(apps):
+    boss, kid = apps
+    reg(kid); sid = [u for u in boss.get("/api/admin/users").json() if u["roll"] == "12"][0]["id"]
+    boss.post(f"/api/admin/users/{sid}/status", json={"status": "approved"}, headers=H)
+    kid.post("/api/login", json={"id": "12", "password": "password1"}, headers=H)
+    assert kid.get("/api/admin-request/mine").json()["status"] is None
+    assert kid.post("/api/admin-request", json={"reason": "I want to help organise events for everyone."}, headers=H).status_code == 200
+    assert boss.post(f"/api/super/admin-requests/{boss.get('/api/super/admin-requests').json()[0]['id']}", json={"decision": "rejected"}, headers=H).status_code == 200
+    assert kid.get("/api/admin-request/mine").json()["status"] == "rejected"
 
 def test_security(apps):
     boss, kid = apps

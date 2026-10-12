@@ -1,5 +1,6 @@
 import "./globals.css";
 export const metadata = { title: "NDC Batch 28 — Notre Dame College, Dhaka", description: "The private portal of Batch 28, Notre Dame College, Dhaka. Love the light of wisdom.",
+  icons: { icon: "/logondc28.svg" },   // browser-tab icon only; the on-page logo stays /logo.svg
   openGraph: { title: "NDC Batch 28", description: "Diligite Lumen Sapientiae", type: "website" } };
 export default function Root({ children }) {
   return (<html lang="en"><head>

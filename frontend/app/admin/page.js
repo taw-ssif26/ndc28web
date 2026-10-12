@@ -48,6 +48,19 @@ function Users({ me }) {
       <h3>Edit {edit.name}</h3>{USER_FIELDS.map(f => <Field key={f[0]} f={f} v={edit[f[0]]} />)}<button className="btn">Save</button><button type="button" onClick={() => setEdit(null)}>Cancel</button></form>}</div>);
 }
 
+// Super admin only: review "I want to be an admin" applications.
+function Requests() {
+  const [rows, setRows] = useState([]), [err, setErr] = useState("");
+  const load = useCallback(() => api("/super/admin-requests").then(setRows).catch(e => setErr(e.message)), []);
+  useEffect(() => { load(); }, [load]);
+  const decide = async (id, decision) => { setErr(""); try { await api("/super/admin-requests/" + id, { method: "POST", json: { decision } }); load(); } catch (x) { setErr(x.message); } };
+  return (<div className="cards">{err && <p className="err">{err}</p>}{rows.map(r => <div className="card" key={r.id}>
+    <div className="row"><img className="av" src={`/api/photo/${r.user_id}`} alt="" /><div><b>{r.name}</b> <em className={`st-${r.status}`}>{r.status}</em><small>Roll {r.roll} · Group {r.group_no} · {r.whatsapp} · registration {r.user_status}</small></div></div>
+    <p style={{ whiteSpace: "pre-wrap", color: "var(--iv)" }}>{r.reason}</p>
+    {r.status === "pending" && <><button onClick={() => decide(r.id, "approved")}>Make admin</button><button onClick={() => decide(r.id, "rejected")}>Decline</button></>}</div>)}
+    {!rows.length && <p>No applications yet.</p>}</div>);
+}
+
 function Gallery() {
   const [rows, setRows] = useState([]), [err, setErr] = useState("");
   const load = useCallback(() => api("/gallery").then(setRows), []);
@@ -67,8 +80,8 @@ export default function Admin() {
   const [me, setMe] = useState(null), [tab, setTab] = useState("users"), router = useRouter();
   useEffect(() => { api("/me").then(m => m.role === "student" ? router.replace("/portal") : setMe(m)).catch(() => router.replace("/")); }, [router]);
   if (!me) return null;
-  const tabs = [["users", "Approvals & users"], ["events", "Events"], ["notices", "Notices"], ["resources", "Resources"], ["groups", "WhatsApp groups"], ["gallery", "Gallery"], ...(me.role === "super" ? [["db", "Database"]] : [])];
+  const tabs = [["users", "Approvals & users"], ["events", "Events"], ["notices", "Notices"], ["resources", "Resources"], ["groups", "WhatsApp groups"], ["gallery", "Gallery"], ...(me.role === "super" ? [["requests", "Admin applications"], ["db", "Database"]] : [])];
   return (<div className="admin"><header><b>Admin · {me.name} ({me.role})</b><a href="/portal">← Portal</a></header>
     <div className="tabs">{tabs.map(([k, l]) => <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>)}</div>
-    {tab === "users" ? <Users me={me} /> : tab === "gallery" ? <Gallery /> : tab === "db" ? <Database /> : <Crud t={tab} />}</div>);
+    {tab === "users" ? <Users me={me} /> : tab === "gallery" ? <Gallery /> : tab === "db" ? <Database /> : tab === "requests" ? <Requests /> : <Crud t={tab} />}</div>);
 }

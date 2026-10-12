@@ -111,7 +111,8 @@ def health():
 @app.post("/api/register")
 async def register(name: str = Form(...), father: str = Form(...), mother: str = Form(...), parent_phone: str = Form(...),
                    whatsapp: str = Form(...), group_no: int = Form(...), roll: str = Form(...), email: str = Form(...),
-                   password: str = Form(...), confirm: str = Form(...), photo: UploadFile = File(...)):
+                   password: str = Form(...), confirm: str = Form(...), photo: UploadFile = File(...),
+                   apply_admin: str = Form(""), admin_reason: str = Form("")):
     email = email.strip().lower(); whatsapp = re.sub(r"[\s-]", "", whatsapp); roll = roll.strip()
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email): raise HTTPException(400, "Invalid email")
     if not re.fullmatch(r"\+?\d{10,15}", whatsapp): raise HTTPException(400, "Invalid WhatsApp number")
@@ -119,11 +120,14 @@ async def register(name: str = Form(...), father: str = Form(...), mother: str =
     if not 1 <= group_no <= 99: raise HTTPException(400, "Invalid group number")
     if len(password) < 8 or password != confirm: raise HTTPException(400, "Passwords must match and be 8+ characters")
     if min(len(name.strip()), len(father.strip()), len(mother.strip())) < 2: raise HTTPException(400, "Fill in all names")
+    want, reason = apply_admin == "1", admin_reason.strip()   # optional: apply to be an admin while registering
+    if want and not 20 <= len(reason) <= 1000: raise HTTPException(400, "Tell us why you would make a good admin (20-1000 characters)")
     if q("select 1 from users where email=%s or roll=%s or whatsapp=%s", (email, roll, whatsapp), one=True):
         raise HTTPException(409, "Email, roll or WhatsApp already registered")
     p = await img(photo, "p")
-    q("insert into users(name,father,mother,parent_phone,whatsapp,group_no,roll,email,photo,pw) values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-      (name.strip()[:80], father.strip()[:80], mother.strip()[:80], parent_phone.strip()[:20], whatsapp, group_no, roll, email, p, hp(password)))
+    uid = q("insert into users(name,father,mother,parent_phone,whatsapp,group_no,roll,email,photo,pw) values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
+      (name.strip()[:80], father.strip()[:80], mother.strip()[:80], parent_phone.strip()[:20], whatsapp, group_no, roll, email, p, hp(password)), one=True)["id"]
+    if want: q("insert into admin_requests(user_id,reason) values(%s,%s)", (uid, reason))
     return {"ok": True}
 
 @app.post("/api/login")
@@ -231,6 +235,31 @@ async def edituser(i: int, r: Request, u=Depends(sup)):
 def deluser(i: int, u=Depends(sup)):
     q("delete from files where id::text in (select photo from users where id=%s and role<>'super')", (i,))
     q("delete from users where id=%s and role<>'super'", (i,)); return {"ok": True}
+
+# ---- Admin applications: students apply, ONLY the super admin decides (admins can't promote admins) ----
+@app.post("/api/admin-request")
+async def apply_admin_later(r: Request, u=Depends(me)):
+    if u["role"] != "student": raise HTTPException(400, "You are already an admin")
+    reason = str((await r.json()).get("reason", "")).strip()
+    if not 20 <= len(reason) <= 1000: raise HTTPException(400, "Tell us why you would make a good admin (20-1000 characters)")
+    if q("select 1 from admin_requests where user_id=%s and status='pending'", (u["id"],), one=True): raise HTTPException(409, "You already have a pending application")
+    q("insert into admin_requests(user_id,reason) values(%s,%s)", (u["id"], reason)); return {"ok": True}
+@app.get("/api/admin-request/mine")
+def my_request(u=Depends(me)):
+    return q("select status, reason, created from admin_requests where user_id=%s order by id desc limit 1", (u["id"],), one=True) or {"status": None}
+@app.get("/api/super/admin-requests")
+def requests_list(u=Depends(sup)):
+    return q("select a.id, a.reason, a.status, a.created, u.id user_id, u.name, u.roll, u.group_no, u.whatsapp, u.status user_status from admin_requests a join users u on u.id=a.user_id order by (a.status='pending') desc, a.id desc")
+@app.post("/api/super/admin-requests/{i}")
+async def decide_request(i: int, r: Request, u=Depends(sup)):
+    d = (await r.json()).get("decision")
+    if d not in ("approved", "rejected"): raise HTTPException(400)
+    a = q("select * from admin_requests where id=%s and status='pending'", (i,), one=True)
+    if not a: raise HTTPException(404, "No pending application")
+    if d == "approved":
+        if not q("select 1 from users where id=%s and status='approved'", (a["user_id"],), one=True): raise HTTPException(400, "Approve the student's registration first")
+        q("update users set role='admin' where id=%s and role='student'", (a["user_id"],))
+    q("update admin_requests set status=%s where id=%s", (d, i)); return {"ok": True}
 
 @app.get("/api/super/stats")
 def stats(u=Depends(sup)):

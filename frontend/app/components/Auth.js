@@ -6,7 +6,7 @@ import { api } from "../lib/api";
 const FIELDS = [["name", "Full name"], ["father", "Father's name"], ["mother", "Mother's name"], ["parent_phone", "Parent's phone", "tel"], ["whatsapp", "Your WhatsApp number", "tel"],
   ["group_no", "Group number", "number"], ["roll", "College roll"], ["email", "Email", "email"], ["password", "Password (8+ chars)", "password"], ["confirm", "Confirm password", "password"]];
 export default function Auth({ mode, setMode, onClose }) {
-  const [err, setErr] = useState(""), [done, setDone] = useState(false), [busy, setBusy] = useState(false), router = useRouter();
+  const [err, setErr] = useState(""), [done, setDone] = useState(false), [busy, setBusy] = useState(false), [want, setWant] = useState(false), router = useRouter();
   async function submit(e) {
     e.preventDefault(); setErr(""); setBusy(true); const f = new FormData(e.target);
     try {
@@ -24,7 +24,10 @@ export default function Auth({ mode, setMode, onClose }) {
         <label>Email, roll or WhatsApp<input name="id" required autoComplete="username" /></label>
         <label>Password<input name="password" type="password" required autoComplete="current-password" /></label></> :
       <><div className="two">{FIELDS.map(([n, l, t = "text"]) => <label key={n}>{l}<input name={n} type={t} required /></label>)}</div>
-        <label>Photo in college dress (JPG/PNG/WebP, max 3MB)<input name="photo" type="file" accept="image/*" required /></label></>}
+        <label>Photo in college dress (JPG/PNG/WebP, max 3MB)<input name="photo" type="file" accept="image/*" required /></label>
+        {/* optional: apply to become an admin; the super admin reviews it */}
+        <label className="chk"><input type="checkbox" name="apply_admin" value="1" onChange={e => setWant(e.target.checked)} /> I also want to apply to be an admin</label>
+        {want && <label>Why should you be selected? (20+ characters)<textarea name="admin_reason" minLength={20} maxLength={1000} required /></label>}</>}
       <button className="btn" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Enter the portal" : "Submit for approval"}</button>
       {err && <p className="err">{err}</p>}
     </form>}
