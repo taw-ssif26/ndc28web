@@ -27,3 +27,12 @@ cd ../frontend && npm install && npm run dev      # http://localhost:3000
 4. Log in as super admin → Admin → WhatsApp groups → add links. Keep Render awake with UptimeRobot on `/api/health` every 5 min.
 5. Backups: weekly `pg_dump "<Neon direct string>" -Fc -f backup.dump`.
 DB tools: `python manage.py stats | backup FILE | restore FILE | reset-password EMAIL | create-super EMAIL`.
+
+## Security & traffic hardening (v3)
+- **Parents' details removed** everywhere; migration `004` permanently deletes the old stored values.
+- **Bot defence:** Cloudflare Turnstile on login + register, per-IP registration limit (6/h), per-account login lockout (5/10 min), pending-registration cap (`MAX_PENDING`), 4 MB body cap.
+- **Proxy lock:** the backend rejects every request without `PROXY_KEY` (added by `frontend/middleware.js`). Calling the Render URL directly returns 403 (only `/api/health` is open).
+- **Sessions** die when a password changes; passwords are 10+ characters.
+- **Traffic:** the landing page and the gallery list/images are cached on Vercel's CDN; lists are cached 15 s in memory and cleared on every admin edit.
+- **Env vars:** Render: `PROXY_KEY`, `TURNSTILE_SECRET`, `MAX_PENDING`. Vercel: `PROXY_KEY` (same value), `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, `API_URL`.
+- **Under attack?** Vercel dashboard -> Firewall -> turn on *Attack Challenge Mode*.

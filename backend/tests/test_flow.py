@@ -5,8 +5,8 @@ H = {"X-Req": "1"}
 import io
 from PIL import Image
 _b = io.BytesIO(); Image.new("RGB", (40, 40), "navy").save(_b, "PNG"); PNG = _b.getvalue()
-D = dict(name="Ab Cd", father="Fa", mother="Ma", parent_phone="01700000000", whatsapp="01711111111", group_no=3,
-         roll="12", email="a@b.com", password="password1", confirm="password1")
+D = dict(name="Ab Cd", whatsapp="01711111111", group_no=3,
+         roll="12", email="a@b.com", password="password-1234", confirm="password-1234")
 
 @pytest.fixture()
 def apps():
@@ -22,13 +22,13 @@ def test_full_flow(apps):
     boss, kid = apps
     assert reg(kid).status_code == 200
     assert reg(kid).status_code == 409                                           # duplicate
-    assert kid.post("/api/login", json={"id": "12", "password": "password1"}, headers=H).status_code == 403  # pending
+    assert kid.post("/api/login", json={"id": "12", "password": "password-1234"}, headers=H).status_code == 403  # pending
     assert kid.get("/api/c/events").status_code == 401                           # public sees nothing
     sid = [u for u in boss.get("/api/admin/users").json() if u["roll"] == "12"][0]["id"]
     boss.post("/api/c/groups", json={"no": 3, "link": "https://chat.whatsapp.com/x"}, headers=H)
     assert boss.post(f"/api/admin/users/{sid}/status", json={"status": "approved"}, headers=H).status_code == 200
     for ident in ("12", "a@b.com", "01711111111"):
-        assert kid.post("/api/login", json={"id": ident, "password": "password1"}, headers=H).status_code == 200
+        assert kid.post("/api/login", json={"id": ident, "password": "password-1234"}, headers=H).status_code == 200
     assert kid.get("/api/community").json()["link"].startswith("https://chat.whatsapp")
     assert kid.get("/api/admin/users").status_code == 403                        # student != admin
     assert kid.post("/api/c/notices", json={"title": "x"}, headers=H).status_code == 403
@@ -43,7 +43,7 @@ def test_admin_application(apps):
     assert boss.post(f"/api/super/admin-requests/{rid}", json={"decision": "approved"}, headers=H).status_code == 400   # student not approved yet
     sid = [u for u in boss.get("/api/admin/users").json() if u["roll"] == "12"][0]["id"]
     boss.post(f"/api/admin/users/{sid}/status", json={"status": "approved"}, headers=H)
-    assert kid.post("/api/login", json={"id": "12", "password": "password1"}, headers=H).status_code == 200
+    assert kid.post("/api/login", json={"id": "12", "password": "password-1234"}, headers=H).status_code == 200
     assert kid.get("/api/admin-request/mine").json()["status"] == "pending"
     assert kid.post("/api/admin-request", json={"reason": "x" * 30}, headers=H).status_code == 409                    # one pending at a time
     assert kid.get("/api/super/admin-requests").status_code == 403                                                    # students can't decide
@@ -55,11 +55,23 @@ def test_apply_later(apps):
     boss, kid = apps
     reg(kid); sid = [u for u in boss.get("/api/admin/users").json() if u["roll"] == "12"][0]["id"]
     boss.post(f"/api/admin/users/{sid}/status", json={"status": "approved"}, headers=H)
-    kid.post("/api/login", json={"id": "12", "password": "password1"}, headers=H)
+    kid.post("/api/login", json={"id": "12", "password": "password-1234"}, headers=H)
     assert kid.get("/api/admin-request/mine").json()["status"] is None
     assert kid.post("/api/admin-request", json={"reason": "I want to help organise events for everyone."}, headers=H).status_code == 200
     assert boss.post(f"/api/super/admin-requests/{boss.get('/api/super/admin-requests').json()[0]['id']}", json={"decision": "rejected"}, headers=H).status_code == 200
     assert kid.get("/api/admin-request/mine").json()["status"] == "rejected"
+
+def test_register_throttle_and_session_revocation(apps):
+    boss, kid = apps
+    codes = [reg(kid, roll=str(50 + n), email=f"x{n}@y.com", whatsapp=f"0172000000{n}").status_code for n in range(8)]
+    assert 429 in codes                                                          # a bot hammering /register gets blocked
+    assert reg(kid, roll="12").status_code == 429
+    main.q("truncate login_fails")
+    reg(kid); sid = [u for u in boss.get("/api/admin/users").json() if u["roll"] == "12"][0]["id"]
+    boss.post(f"/api/admin/users/{sid}/status", json={"status": "approved"}, headers=H)
+    kid.post("/api/login", json={"id": "12", "password": "password-1234"}, headers=H); assert kid.get("/api/me").status_code == 200
+    boss.patch(f"/api/admin/users/{sid}", json={"password": "a-brand-new-pass"}, headers=H)
+    assert kid.get("/api/me").status_code == 401                                 # old session dies when the password changes
 
 def test_security(apps):
     boss, kid = apps

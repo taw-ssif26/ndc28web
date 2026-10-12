@@ -1,4 +1,4 @@
-import os, re, io, csv, time, hmac, hashlib, base64, json, secrets, uuid
+import os, re, io, csv, asyncio, urllib.parse, urllib.request, time, hmac, hashlib, base64, json, secrets, uuid
 from pathlib import Path
 import psycopg
 from PIL import Image, ImageOps
@@ -12,8 +12,11 @@ B = Path(__file__).parent
 Image.MAX_IMAGE_PIXELS = 25_000_000
 SECRET = os.environ["SECRET_KEY"].encode()
 PROD = os.getenv("PROD") == "1"
+PROXY_KEY = os.getenv("PROXY_KEY", "")            # shared secret: only your Vercel site may call this API
+TURNSTILE = os.getenv("TURNSTILE_SECRET", "")     # Cloudflare Turnstile secret (bot check); empty = disabled
+MAX_PENDING = int(os.getenv("MAX_PENDING", "300"))  # refuse new registrations if this many are waiting (stops DB flooding)
 if PROD and len(SECRET) < 32: raise SystemExit("SECRET_KEY must be 32+ chars in production")
-pool = ConnectionPool(os.environ["DATABASE_URL"], min_size=1, max_size=5, max_idle=120, open=False, check=ConnectionPool.check_connection,
+pool = ConnectionPool(os.environ["DATABASE_URL"], min_size=1, max_size=8, timeout=10, max_idle=120, open=False, check=ConnectionPool.check_connection,
                       kwargs={"row_factory": dict_row, "prepare_threshold": None})  # Neon pooler-safe, survives idle disconnects
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -40,20 +43,42 @@ def vp(p, h):
     raw = base64.b64decode(h); s, k = raw[:16], raw[16:]
     return hmac.compare_digest(hashlib.scrypt(p.encode(), salt=s, n=2**14, r=8, p=1), k)
 def sign(b): return hmac.new(SECRET, b.encode(), "sha256").hexdigest()
-def mk(uid):
-    b = base64.urlsafe_b64encode(json.dumps({"u": uid, "e": int(time.time()) + 604800}).encode()).decode()
+def fp(pw): return hashlib.sha256(pw.encode()).hexdigest()[:16]   # changes when the password changes -> old sessions die
+def mk(uid, pw):
+    b = base64.urlsafe_b64encode(json.dumps({"u": uid, "p": fp(pw), "e": int(time.time()) + 604800}).encode()).decode()
     return b + "." + sign(b)
 def rd(t):
     try:
         b, s = t.split(".")
         if not hmac.compare_digest(s, sign(b)): return None
         d = json.loads(base64.urlsafe_b64decode(b))
-        return d["u"] if d["e"] > time.time() else None
+        return d if d["e"] > time.time() else None
     except Exception: return None
 
 def make_super(email, password):
-    q("insert into users(name,father,mother,parent_phone,whatsapp,group_no,roll,email,photo,pw,role,status) values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'super','approved')",
-      ("Super Admin", "-", "-", "-", "super", 0, "super", email.lower(), "", hp(password)))
+    q("insert into users(name,whatsapp,group_no,roll,email,photo,pw,role,status) values(%s,%s,%s,%s,%s,%s,%s,'super','approved')",
+      ("Super Admin", "super", 0, "super", email.lower(), "", hp(password)))
+
+# ---- abuse protection helpers ----
+def ip(r): return (r.headers.get("x-client-ip") or r.client.host)[:64] if PROXY_KEY else r.client.host   # x-client-ip is set by our Vercel proxy
+def too_many(k, limit, window):
+    now = time.time(); q("delete from login_fails where at<%s", (now - 3600,))
+    return q("select count(*) n from login_fails where k=%s and at>%s", (k, now - window), one=True)["n"] >= limit
+def hit(*ks):
+    for k in ks: q("insert into login_fails values(%s,%s)", (k, time.time()))
+def captcha_ok(token, addr):
+    if not TURNSTILE: return True
+    try:
+        data = urllib.parse.urlencode({"secret": TURNSTILE, "response": token or "", "remoteip": addr}).encode()
+        with urllib.request.urlopen("https://challenges.cloudflare.com/turnstile/v0/siteverify", data, timeout=5) as r: return json.load(r).get("success") is True
+    except Exception: return False
+
+# ---- tiny in-memory cache so busy pages don't hit the database every time ----
+_c = {}
+def cached(k, ttl, fn):
+    h = _c.get(k)
+    if h and h[0] > time.time(): return h[1]
+    v = fn(); _c[k] = (time.time() + ttl, v); return v
 
 def init():
     pool.open(); migrate()
@@ -70,6 +95,9 @@ async def dup(r, e): return JSONResponse({"detail": "That value already exists"}
 
 @app.middleware("http")
 async def guard(r: Request, call_next):
+    if PROXY_KEY and r.url.path != "/api/health" and not hmac.compare_digest(r.headers.get("x-proxy-key", ""), PROXY_KEY):
+        return JSONResponse({"detail": "Forbidden"}, 403)          # direct hits on the Render URL are rejected
+    if int(r.headers.get("content-length") or 0) > 4_000_000: return JSONResponse({"detail": "Too large"}, 413)
     if r.url.path.startswith("/api") and r.method != "GET" and r.headers.get("x-req") != "1":
         return JSONResponse({"detail": "Forbidden"}, 403)
     res = await call_next(r)
@@ -77,13 +105,13 @@ async def guard(r: Request, call_next):
         "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
         "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "strict-origin-when-cross-origin",
         "Permissions-Policy": "camera=(), microphone=(), geolocation=()", "Strict-Transport-Security": "max-age=31536000; includeSubDomains"})
-    if r.url.path.startswith("/api"): res.headers["X-Robots-Tag"] = "noindex"; res.headers["Cache-Control"] = "no-store"
+    if r.url.path.startswith("/api"): res.headers["X-Robots-Tag"] = "noindex"; res.headers.setdefault("Cache-Control", "no-store")
     return res
 
 def me(r: Request):
-    u = rd(r.cookies.get("s", ""))
-    row = u and q("select * from users where id=%s", (u,), one=True)
-    if not row or row["status"] != "approved": raise HTTPException(401, "Please log in")
+    d = rd(r.cookies.get("s", ""))
+    row = d and q("select * from users where id=%s", (d["u"],), one=True)
+    if not row or row["status"] != "approved" or d["p"] != fp(row["pw"]): raise HTTPException(401, "Please log in")
     return row
 def admin(u=Depends(me)):
     if u["role"] not in ("admin", "super"): raise HTTPException(403, "Admins only")
@@ -109,41 +137,44 @@ def health():
     q("select 1"); return {"ok": True}
 
 @app.post("/api/register")
-async def register(name: str = Form(...), father: str = Form(...), mother: str = Form(...), parent_phone: str = Form(...),
-                   whatsapp: str = Form(...), group_no: int = Form(...), roll: str = Form(...), email: str = Form(...),
+async def register(r: Request, name: str = Form(...), whatsapp: str = Form(...), group_no: int = Form(...), roll: str = Form(...), email: str = Form(...),
                    password: str = Form(...), confirm: str = Form(...), photo: UploadFile = File(...),
-                   apply_admin: str = Form(""), admin_reason: str = Form("")):
+                   apply_admin: str = Form(""), admin_reason: str = Form(""), captcha: str = Form("", alias="cf-turnstile-response")):
+    rk = "reg:" + ip(r)
+    if too_many(rk, 6, 3600): raise HTTPException(429, "Too many attempts from your network. Try again later.")
+    hit(rk)
+    if not await asyncio.to_thread(captcha_ok, captcha, ip(r)): raise HTTPException(400, "Bot check failed. Please retry.")
+    if q("select count(*) n from users where status='pending'", one=True)["n"] >= MAX_PENDING: raise HTTPException(503, "Registrations are temporarily closed. Contact an admin.")
     email = email.strip().lower(); whatsapp = re.sub(r"[\s-]", "", whatsapp); roll = roll.strip()
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email): raise HTTPException(400, "Invalid email")
     if not re.fullmatch(r"\+?\d{10,15}", whatsapp): raise HTTPException(400, "Invalid WhatsApp number")
     if not re.fullmatch(r"\d{1,8}", roll): raise HTTPException(400, "Roll must be digits")
     if not 1 <= group_no <= 99: raise HTTPException(400, "Invalid group number")
-    if len(password) < 8 or password != confirm: raise HTTPException(400, "Passwords must match and be 8+ characters")
-    if min(len(name.strip()), len(father.strip()), len(mother.strip())) < 2: raise HTTPException(400, "Fill in all names")
+    if len(password) < 10 or password != confirm: raise HTTPException(400, "Passwords must match and be 10+ characters")
+    if len(name.strip()) < 2: raise HTTPException(400, "Enter your full name")
     want, reason = apply_admin == "1", admin_reason.strip()   # optional: apply to be an admin while registering
     if want and not 20 <= len(reason) <= 1000: raise HTTPException(400, "Tell us why you would make a good admin (20-1000 characters)")
     if q("select 1 from users where email=%s or roll=%s or whatsapp=%s", (email, roll, whatsapp), one=True):
         raise HTTPException(409, "Email, roll or WhatsApp already registered")
     p = await img(photo, "p")
-    uid = q("insert into users(name,father,mother,parent_phone,whatsapp,group_no,roll,email,photo,pw) values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
-      (name.strip()[:80], father.strip()[:80], mother.strip()[:80], parent_phone.strip()[:20], whatsapp, group_no, roll, email, p, hp(password)), one=True)["id"]
+    uid = q("insert into users(name,whatsapp,group_no,roll,email,photo,pw) values(%s,%s,%s,%s,%s,%s,%s) returning id",
+      (name.strip()[:80], whatsapp, group_no, roll, email, p, hp(password)), one=True)["id"]
     if want: q("insert into admin_requests(user_id,reason) values(%s,%s)", (uid, reason))
     return {"ok": True}
 
 @app.post("/api/login")
 async def login(r: Request):
-    d = await r.json(); i = str(d.get("id", "")).strip().lower().replace(" ", ""); ipk = "ip:" + r.client.host; now = time.time()
-    q("delete from login_fails where at<%s", (now - 600,))
-    if q("select count(*) n from login_fails where k=%s", (i,), one=True)["n"] >= 5 or q("select count(*) n from login_fails where k=%s", (ipk,), one=True)["n"] >= 25:
-        raise HTTPException(429, "Too many attempts. Try again in 10 minutes.")
+    d = await r.json(); i = str(d.get("id", "")).strip().lower().replace(" ", ""); ipk = "ip:" + ip(r)
+    if too_many(i, 5, 600) or too_many(ipk, 25, 600): raise HTTPException(429, "Too many attempts. Try again in 10 minutes.")
+    if not await asyncio.to_thread(captcha_ok, d.get("cf-turnstile-response"), ip(r)): raise HTTPException(400, "Bot check failed. Please retry.")
     u = q("select * from users where lower(email)=%s or roll=%s or whatsapp=%s", (i, i, i), one=True)
     if not u or not vp(str(d.get("password", "")), u["pw"]):
-        q("insert into login_fails values(%s,%s),(%s,%s)", (i, now, ipk, now)); raise HTTPException(401, "Wrong credentials")
+        hit(i, ipk); raise HTTPException(401, "Wrong credentials")
     if u["status"] == "pending": raise HTTPException(403, "Your registration is awaiting admin approval")
     if u["status"] == "rejected": raise HTTPException(403, "Your registration was not approved")
     q("delete from login_fails where k=%s", (i,))
     res = JSONResponse({"ok": True})
-    res.set_cookie("s", mk(u["id"]), httponly=True, samesite="strict", secure=PROD, max_age=604800)
+    res.set_cookie("s", mk(u["id"], u["pw"]), httponly=True, samesite="strict", secure=PROD, max_age=604800)
     return res
 
 @app.post("/api/logout")
@@ -161,7 +192,7 @@ def photo(uid: int, u=Depends(me)):
 def media(fid: int):
     f = q("select data from files where id=%s and kind='g'", (fid,), one=True)
     if not f: raise HTTPException(404)
-    return Response(bytes(f["data"]), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000, immutable"})
+    return Response(bytes(f["data"]), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000, s-maxage=31536000, immutable"})
 @app.get("/api/community")
 def community(u=Depends(me)):
     g = q("select link from groups where no=%s", (u["group_no"],), one=True)
@@ -185,30 +216,31 @@ def clean(t, d):
 @app.get("/api/c/{t}")
 def lst(t: str, u=Depends(me)):
     if t not in T or (t == "groups" and u["role"] == "student"): raise HTTPException(404)
-    return q(f"select * from {t} order by {ORD[t]}")
+    return cached(("l", t), 15, lambda: q(f"select * from {t} order by {ORD[t]}"))
 @app.post("/api/c/{t}")
 async def add(t: str, r: Request, u=Depends(admin)):
     o = clean(t, await r.json()); k = list(o)
     up = " on conflict (no) do update set link=excluded.link" if t == "groups" else ""
-    q(f"insert into {t}({','.join(k)}) values({','.join(['%s']*len(k))}){up}", list(o.values())); return {"ok": True}
+    q(f"insert into {t}({','.join(k)}) values({','.join(['%s']*len(k))}){up}", list(o.values())); _c.clear(); return {"ok": True}
 @app.put("/api/c/{t}/{i}")
 async def upd(t: str, i: int, r: Request, u=Depends(admin)):
     o = clean(t, await r.json())
-    q(f"update {t} set {','.join(k+'=%s' for k in o)} where id=%s", [*o.values(), i]); return {"ok": True}
+    q(f"update {t} set {','.join(k+'=%s' for k in o)} where id=%s", [*o.values(), i]); _c.clear(); return {"ok": True}
 @app.delete("/api/c/{t}/{i}")
 def rm(t: str, i: int, u=Depends(admin)):
     if t not in T: raise HTTPException(404)
-    q(f"delete from {t} where id=%s", (i,)); return {"ok": True}
+    q(f"delete from {t} where id=%s", (i,)); _c.clear(); return {"ok": True}
 
 @app.get("/api/gallery")
-def gal(): return q("select * from gallery order by id desc")
+def gal():   # public + CDN-cached: landing-page visitors rarely reach the database
+    return JSONResponse(cached("gal", 30, lambda: q("select * from gallery order by id desc")), headers={"Cache-Control": "public, s-maxage=60, stale-while-revalidate=300"})
 @app.post("/api/gallery")
 async def galadd(caption: str = Form(""), file: UploadFile = File(...), u=Depends(admin)):
-    q("insert into gallery(caption,file) values(%s,%s)", (caption[:200], await img(file, "g"))); return {"ok": True}
+    q("insert into gallery(caption,file) values(%s,%s)", (caption[:200], await img(file, "g"))); _c.clear(); return {"ok": True}
 @app.delete("/api/gallery/{i}")
 def galdel(i: int, u=Depends(admin)):
     g = q("select file from gallery where id=%s", (i,), one=True)
-    if g: q("delete from files where id=%s", (int(g["file"]),)); q("delete from gallery where id=%s", (i,))
+    if g: q("delete from files where id=%s", (int(g["file"]),)); q("delete from gallery where id=%s", (i,)); _c.clear()
     return {"ok": True}
 
 @app.get("/api/admin/users")
@@ -221,13 +253,13 @@ async def setstatus(i: int, r: Request, u=Depends(admin)):
 @app.patch("/api/admin/users/{i}")
 async def edituser(i: int, r: Request, u=Depends(sup)):
     d = await r.json(); o = {}
-    for f in ("name", "father", "mother", "parent_phone", "whatsapp", "roll", "email"):
+    for f in ("name", "whatsapp", "roll", "email"):
         if f in d and str(d[f]).strip(): o[f] = str(d[f]).strip()[:80].lower() if f == "email" else str(d[f]).strip()[:80]
     if str(d.get("group_no", "")).isdigit(): o["group_no"] = int(d["group_no"])
     if d.get("role") in ("student", "admin"): o["role"] = d["role"]
     if d.get("status") in ("pending", "approved", "rejected"): o["status"] = d["status"]
     if d.get("password"):
-        if len(d["password"]) < 8: raise HTTPException(400, "Password too short")
+        if len(d["password"]) < 10: raise HTTPException(400, "Password must be 10+ characters")
         o["pw"] = hp(d["password"])
     if o: q(f"update users set {','.join(k+'=%s' for k in o)} where id=%s and role<>'super'", [*o.values(), i])
     return {"ok": True}
@@ -267,7 +299,7 @@ def stats(u=Depends(sup)):
     return {"users": s, **{t: q(f"select count(*) n from {t}", one=True)["n"] for t in ("events", "notices", "resources", "gallery", "groups")}}
 @app.get("/api/super/export.csv")
 def export(u=Depends(sup)):
-    cols = ["id", "name", "father", "mother", "parent_phone", "whatsapp", "group_no", "roll", "email", "role", "status", "created"]
+    cols = ["id", "name", "whatsapp", "group_no", "roll", "email", "role", "status", "created"]
     o = io.StringIO(); w = csv.writer(o); w.writerow(cols)
     for r in q("select * from users order by id"):
         w.writerow(["'" + str(r[c]) if str(r[c]).startswith(("=", "+", "-", "@")) else r[c] for c in cols])  # CSV-injection safe

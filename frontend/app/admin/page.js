@@ -11,8 +11,8 @@ const FIELDS = {
   resources: [["title", "Title"], ["kind", "Type", "select:PDF,Video,Doc,Link,Slides,Other"], ["url", "URL", "url"], ["description", "Description", "textarea"]],
   groups: [["no", "Group number", "number"], ["link", "WhatsApp invite link", "url"]],
 };
-const USER_FIELDS = [["name", "Name"], ["father", "Father"], ["mother", "Mother"], ["parent_phone", "Parent phone"], ["whatsapp", "WhatsApp"], ["group_no", "Group", "number"], ["roll", "Roll"],
-  ["email", "Email", "email"], ["role", "Role", "select:student,admin"], ["status", "Status", "select:pending,approved,rejected"], ["password", "New password (optional)", "password"]];
+const USER_FIELDS = [["name", "Name"], ["whatsapp", "WhatsApp"], ["group_no", "Group", "number"], ["roll", "Roll"],
+  ["email", "Email", "email"], ["role", "Role", "select:student,admin"], ["status", "Status", "select:pending,approved,rejected"], ["password", "New password (optional, 10+)", "password"]];
 
 function Field({ f, v }) {
   const [n, l, t = "text"] = f;
@@ -40,7 +40,7 @@ function Users({ me }) {
   const run = async fn => { try { await fn(); load(); } catch (x) { setErr(x.message); } };
   const status = (id, s) => run(() => api(`/admin/users/${id}/status`, { method: "POST", json: { status: s } }));
   return (<div>{err && <p className="err">{err}</p>}<div className="cards">{rows.map(u => <div className="card" key={u.id}><div className="row">{u.role !== "super" && <img className="av" src={`/api/photo/${u.id}`} alt="" />}
-      <div><b>{u.name}</b> <em className={`st-${u.status}`}>{u.status} · {u.role}</em><small>Roll {u.roll} · Group {u.group_no} · {u.whatsapp} · {u.email}<br />Parents: {u.father} / {u.mother} · {u.parent_phone}</small></div></div>
+      <div><b>{u.name}</b> <em className={`st-${u.status}`}>{u.status} · {u.role}</em><small>Roll {u.roll} · Group {u.group_no} · {u.whatsapp} · {u.email}</small></div></div>
       {u.role === "student" && u.status !== "approved" && <button onClick={() => status(u.id, "approved")}>Approve</button>}
       {u.role === "student" && u.status !== "rejected" && <button onClick={() => status(u.id, "rejected")}>Reject</button>}
       {me.role === "super" && u.role !== "super" && <><button onClick={() => setEdit(u)}>Edit</button><button onClick={() => confirm("Delete permanently?") && run(() => api("/admin/users/" + u.id, { method: "DELETE" }))}>Delete</button></>}</div>)}</div>
