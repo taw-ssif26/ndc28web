@@ -66,14 +66,19 @@ function Gallery() {
   const load = useCallback(() => api("/gallery").then(setRows), []);
   useEffect(() => { load(); }, [load]);
   async function up(e) { e.preventDefault(); setErr(""); try { await api("/gallery", { method: "POST", body: new FormData(e.target) }); e.target.reset(); load(); } catch (x) { setErr(x.message); } }
-  return (<div className="split"><div className="mason">{rows.map(g => <div key={g.id}><img src={`/media/${g.file}`} alt="" /><button onClick={async () => { await api("/gallery/" + g.id, { method: "DELETE" }); load(); }}>Delete</button></div>)}</div>
+  return (<div className="split"><div className="mason">{rows.map(g => <figure key={g.id}><img src={`/media/${g.file}`} alt={g.caption || ""} />{g.caption && <figcaption>{g.caption}</figcaption>}<button onClick={async () => { await api("/gallery/" + g.id, { method: "DELETE" }); load(); }}>Delete</button></figure>)}</div>
     <form className="card" onSubmit={up}><h3>Upload photo</h3><label>Caption<input name="caption" /></label><label>Image<input name="file" type="file" accept="image/*" required /></label><button className="btn">Upload</button>{err && <p className="err">{err}</p>}</form></div>);
 }
 
 function Database() {
-  const [s, setS] = useState(null); useEffect(() => { api("/super/stats").then(setS); }, []); if (!s) return null;
+  const [s, setS] = useState(null), load = () => api("/super/stats").then(setS); useEffect(() => { load(); }, []); if (!s) return null;
+  // clean-up tools for spam/bot registrations
+  const purge = async (what, msg) => { if (!confirm(msg)) return; try { const r = await api("/super/purge", { method: "POST", json: { what } }); alert(`Deleted ${r.deleted}`); load(); } catch (x) { alert(x.message); } };
   return (<><div className="bento">{[["Pending", s.users.pending || 0], ["Approved", s.users.approved || 0], ["Rejected", s.users.rejected || 0], ["Events", s.events], ["Notices", s.notices], ["Resources", s.resources], ["Photos", s.gallery], ["Groups", s.groups]]
-    .map(([l, n]) => <div className="card" key={l}><span className="tag">{l}</span><div className="big">{n}</div></div>)}</div><br /><a className="btn" href="/api/super/export.csv">Download users CSV</a></>);
+    .map(([l, n]) => <div className="card" key={l}><span className="tag">{l}</span><div className="big">{n}</div></div>)}</div><br /><a className="btn" href="/api/super/export.csv">Download users CSV</a>
+    <div className="card" style={{ marginTop: 18 }}><h3>Clean-up</h3><p>Use after spam or a bot attack.</p><br />
+      <button onClick={() => purge("pending", "Delete ALL students still waiting for approval (including genuine ones)? This cannot be undone.")}>Delete all pending registrations</button>
+      <button onClick={() => purge("orphans", "Delete unused photos and old rate-limit rows?")}>Clean unused photos</button></div></>);
 }
 
 export default function Admin() {

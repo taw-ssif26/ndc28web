@@ -35,7 +35,7 @@ function Tab({ tab, me }) {
   if (tab === "notices") return <div className="cards">{d.map(x => <Notice key={x.id} x={x} />)}{!d.length && <p>No notices yet.</p>}</div>;
   if (tab === "community") return <div className="card"><span className="tag">Group {d.group}</span><h3>Your WhatsApp group</h3>{d.link ? <><br /><Link href={d.link}>Join on WhatsApp</Link></> : <p>Your group's link hasn't been added yet. Ask an admin.</p>}</div>;
   if (tab === "resources") return <div className="bento">{d.map(x => <div className="card" key={x.id}><span className="tag">{x.kind}</span><h3>{x.title}</h3><p>{x.description}</p><br /><Link href={x.url}>Open</Link></div>)}{!d.length && <p>No resources yet.</p>}</div>;
-  return <div className="mason">{d.map(g => <img key={g.id} src={`/media/${g.file}`} alt={g.caption || "Batch 28"} loading="lazy" />)}</div>;
+  return <div className="mason">{d.map(g => <figure key={g.id}><img src={`/media/${g.file}`} alt={g.caption || "Batch 28"} loading="lazy" />{g.caption && <figcaption>{g.caption}</figcaption>}</figure>)}</div>;
 }
 
 export default function Portal() {

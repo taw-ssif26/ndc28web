@@ -38,7 +38,7 @@ export default function Home() {
       <p className="lock">Members only · every registration is reviewed by an admin</p></section>
 
     <section className="wrap"><Reveal><h2>Gallery</h2></Reveal>
-      <div className="mason">{photos.length ? photos.map(g => <img key={g.id} src={`/media/${g.file}`} alt={g.caption || "Batch 28"} loading="lazy" />) : <p>Photos coming soon.</p>}</div></section>
+      <div className="mason">{photos.length ? photos.map(g => <figure key={g.id}><img src={`/media/${g.file}`} alt={g.caption || "Batch 28"} loading="lazy" />{g.caption && <figcaption>{g.caption}</figcaption>}</figure>) : <p>Photos coming soon.</p>}</div></section>
 
     <section className="wrap"><Reveal className="card dev"><h3>Built by {SITE.dev.name}</h3><p>Self-taught full-stack developer — Python, Next.js, PostgreSQL and AI systems.</p><br />
       <a className="btn" target="_blank" rel="noopener" href={SITE.dev.url}>{SITE.dev.url.replace("https://", "")} ↗</a></Reveal></section>
